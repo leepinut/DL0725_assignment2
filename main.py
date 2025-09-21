@@ -115,9 +115,17 @@ def main():
 
                             due_date_str = due_date_tag.text.replace('마감일 :','').strip()
                             course_name = course_name_tag.text.strip().split('(')[0].strip()
-                            assignment_name = assignment_name_tag.text.strip()
-                            relative_link = onclick_attr.split(',')[1].strip().strip("'").replace('report_insert_form.acl', 'report_view_form.acl')
-                            full_link = f"{LMS_URL}{relative_link}"
+                assignment_name = assignment_name_tag.text.strip()
+
+                # Construct a new URL that forces the correct course and assignment context
+                if 'kj_id=' in onclick_attr:
+                    kj_id = onclick_attr.split('kj_id=')[1].split("'")[0]
+                    relative_link = f"/ilos/st/course/report_view_form.acl?kj_id={kj_id}&RT_SEQ={assignment_id}"
+                else:
+                    # Fallback if kj_id is not found (less likely to work)
+                    relative_link = f"/ilos/st/course/report_view_form.acl?RT_SEQ={assignment_id}"
+                
+                full_link = f"{LMS_URL}{relative_link}"
 
                             if assignment_id not in unique_ids:
                                 unique_ids.add(assignment_id)
