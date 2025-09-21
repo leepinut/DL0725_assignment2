@@ -116,7 +116,7 @@ def main():
                             due_date_str = due_date_tag.text.replace('마감일 :','').strip()
                             course_name = course_name_tag.text.strip().split('(')[0].strip()
                             assignment_name = assignment_name_tag.text.strip()
-                            relative_link = onclick_attr.split(',')[1].strip(" '")[0]
+                            relative_link = onclick_attr.split(',')[1].strip().strip("'")
                             full_link = f"{LMS_URL}{relative_link}"
 
                             if assignment_id not in unique_ids:
@@ -156,7 +156,6 @@ def main():
             e.uid = f"{assignment['id']}@lms.mju.ac.kr"
             e.name = f"[{assignment['course']}] {assignment['title']}"
             e.begin = due_date
-            e.make_all_day()
             e.description = assignment['link'] # Set description to URL only
             e.created = datetime.now()
             c.events.add(e)
