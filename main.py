@@ -156,6 +156,7 @@ def main():
             e.uid = f"{assignment['id']}@lms.mju.ac.kr"
             e.name = f"[{assignment['course']}] {assignment['title']}"
             e.begin = due_date
+            e.make_all_day()
             e.description = assignment['link'] # Set description to URL only
             e.created = datetime.now()
             c.events.add(e)
