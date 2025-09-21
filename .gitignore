@@ -1,0 +1,12 @@
+# Generated files
+lms_assignments.ics
+processed_assignments.json
+
+# Local configuration
+config.json
+
+# Python
+__pycache__/
+*.pyc
+.env
+venv/
