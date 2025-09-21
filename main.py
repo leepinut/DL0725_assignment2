@@ -116,7 +116,7 @@ def main():
                             due_date_str = due_date_tag.text.replace('마감일 :','').strip()
                             course_name = course_name_tag.text.strip().split('(')[0].strip()
                             assignment_name = assignment_name_tag.text.strip()
-                            relative_link = onclick_attr.split(',')[1].strip().strip("'")
+                            relative_link = onclick_attr.split(',')[1].strip(" '")[0]
                             full_link = f"{LMS_URL}{relative_link}"
 
                             if assignment_id not in unique_ids:
