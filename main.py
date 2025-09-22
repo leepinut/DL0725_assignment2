@@ -3,14 +3,43 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
-from ics import Calendar, Event
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import json
+import pickle
+import re # Import re for regular expressions
+from google.auth.transport.requests import Request
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
 
 # The file to store IDs and due dates of assignments that have already been processed
 PROCESSED_FILE = 'processed_assignments.json'
+# Scopes for Google Calendar API
+SCOPES = ['https://www.googleapis.com/auth/calendar']
+# Token file for Google API
+TOKEN_FILE = 'token.pickle'
+
+def get_calendar_service():
+    """Authenticates with Google and returns the Calendar service object."""
+    creds = None
+    if os.path.exists(TOKEN_FILE):
+        with open(TOKEN_FILE, 'rb') as token:
+            creds = pickle.load(token)
+    # If there are no (valid) credentials available, let the user log in.
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                'credentials.json', SCOPES)
+            creds = flow.run_local_server(port=0)
+        # Save the credentials for the next run
+        with open(TOKEN_FILE, 'wb') as token:
+            pickle.dump(creds, token)
+    
+    service = build('calendar', 'v3', credentials=creds)
+    return service
 
 def parse_due_date(date_str):
     """Parses the specific date format from the LMS."""
@@ -99,35 +128,38 @@ def main():
         try:
             list_container = wait.until(EC.presence_of_element_located((By.ID, "shedule_list_form")))
             soup = BeautifulSoup(list_container.get_attribute('outerHTML'), 'html.parser')
-            items = soup.find_all('div', class_='schedule-show-control')
+            items = soup.select('div.schedule-show-control')
             for item in items:
                 if '[과제]' in item.text:
                     details_div = item.find_next_sibling('div', class_='changeDetile')
-                    if details_div and details_div.find('a'):
-                        onclick_attr = details_div.find('a').get('onclick', '')
-                        if 'RT_SEQ=' in onclick_attr:
-                            # Extract Assignment ID for tracking purposes
-                            assignment_id = onclick_attr.split('RT_SEQ=')[1].split("'")[0]
+                    if details_div and details_div.select_one('a'):
+                        onclick_attr = details_div.select_one('a').get('onclick', '')
+                        
+                        # Use regex to reliably extract the assignment ID
+                        match = re.search(r"RT_SEQ=(\d+)", onclick_attr)
+                        if not match:
+                            continue # Skip if no ID is found
+                        
+                        assignment_id = match.group(1)
 
-                            due_date_tag = details_div.find('div', string=lambda t: t and '마감일' in t)
-                            course_name_tag = details_div.find('div', class_='schedule_view_title')
-                            assignment_name_tag = item.find('span')
+                        due_date_tag = details_div.find('div', string=lambda t: t and '마감일' in t)
+                        course_name_tag = details_div.select_one('div.schedule_view_title')
+                        assignment_name_tag = item.select_one('span')
 
-                            if not all([due_date_tag, course_name_tag, assignment_name_tag]): continue
+                        if not all([due_date_tag, course_name_tag, assignment_name_tag]): 
+                            continue
 
-                            due_date_str = due_date_tag.text.replace('마감일 :','').strip()
-                            course_name = course_name_tag.text.strip().split('(')[0].strip()
-                            assignment_name = assignment_name_tag.text.strip()
-                            
-                            # Default link to the main LMS page to avoid permission errors
-                            full_link = LMS_URL
+                        due_date_str = due_date_tag.text.replace('마감일 :','').strip()
+                        course_name = course_name_tag.text.strip().split('(')[0].strip()
+                        assignment_name = assignment_name_tag.text.strip()
+                        full_link = LMS_URL
 
-                            if assignment_id not in unique_ids:
-                                unique_ids.add(assignment_id)
-                                all_assignments.append({
-                                    "id": assignment_id, "course": course_name, "title": assignment_name,
-                                    "due_date_str": due_date_str, "link": full_link
-                                })
+                        if assignment_id not in unique_ids:
+                            unique_ids.add(assignment_id)
+                            all_assignments.append({
+                                "id": assignment_id, "course": course_name, "title": assignment_name,
+                                "due_date_str": due_date_str, "link": full_link
+                            })
         except Exception as e:
             print(f"Error parsing assignment list: {e}")
         
@@ -140,34 +172,59 @@ def main():
             print("Could not navigate to the next month. Assuming end of schedule.")
             break
 
+    # --- Close browser ---
+    driver.quit()
+
     # --- Filter for new or updated assignments ---
-    final_assignments = []
+    new_or_updated_assignments = []
     for assign in all_assignments:
         if assign['id'] not in processed_data or processed_data[assign['id']] != assign['due_date_str']:
-            final_assignments.append(assign)
+            new_or_updated_assignments.append(assign)
 
-    # --- Create iCalendar (.ics) file ---
-    if final_assignments:
-        print(f"\nFound {len(final_assignments)} new or updated assignments.")
-        print(f"Creating calendar file: lms_assignments.ics")
-        c = Calendar()
-        for assignment in final_assignments:
+    # --- Sync with Google Calendar ---
+    if new_or_updated_assignments:
+        print(f"\nFound {len(new_or_updated_assignments)} new or updated assignments. Syncing with Google Calendar...")
+        service = get_calendar_service()
+        
+        for assignment in new_or_updated_assignments:
             due_date = parse_due_date(assignment['due_date_str'])
             if not due_date: continue
-            
-            e = Event()
-            e.uid = f"{assignment['id']}@lms.mju.ac.kr"
-            e.name = f"[{assignment['course']}] {assignment['title']}"
-            e.begin = due_date
-            e.make_all_day()
-            e.description = assignment['link'] # Set description to URL only
-            e.created = datetime.now()
-            c.events.add(e)
-            processed_data[assignment['id']] = assignment['due_date_str']
 
-        with open('lms_assignments.ics', 'w', encoding='utf-8') as f:
-            f.writelines(c)
-        print("\nSuccessfully created lms_assignments.ics file!")
+            event_uid = f"{assignment['id']}@lms.mju.ac.kr"
+            event_summary = f"[{assignment['course']}] {assignment['title']}"
+            
+            # For all-day events, the end date should be the day after the start date.
+            event_start = {'date': due_date.strftime('%Y-%m-%d')}
+            event_end = {'date': (due_date + timedelta(days=1)).strftime('%Y-%m-%d')}
+
+            event_body = {
+                'summary': event_summary,
+                'description': f"LMS 바로가기: {assignment['link']}",
+                'start': event_start,
+                'end': event_end,
+                'iCalUID': event_uid, # Use assignment ID for unique identification
+            }
+
+            try:
+                # Check if event already exists
+                events_result = service.events().list(calendarId='primary', iCalUID=event_uid).execute()
+                existing_event = events_result.get('items', [])
+
+                if existing_event:
+                    # Update existing event
+                    updated_event = service.events().update(calendarId='primary', eventId=existing_event[0]['id'], body=event_body).execute()
+                    print(f"Updated event: {updated_event.get('summary')}")
+                else:
+                    # Create new event
+                    created_event = service.events().insert(calendarId='primary', body=event_body).execute()
+                    print(f"Created event: {created_event.get('summary')}")
+                
+                # Update processed data upon successful API call
+                processed_data[assignment['id']] = assignment['due_date_str']
+
+            except Exception as e:
+                print(f"An error occurred while syncing event '{event_summary}': {e}")
+
     else:
         print("\nNo new or updated assignments found.")
 
@@ -175,9 +232,6 @@ def main():
     with open(PROCESSED_FILE, 'w', encoding='utf-8') as f:
         json.dump(processed_data, f, indent=2, ensure_ascii=False)
     print(f"Updated {PROCESSED_FILE} with latest assignment data.")
-
-    # --- Close browser ---
-    driver.quit()
     print("\nAll tasks completed.")
 
 if __name__ == "__main__":

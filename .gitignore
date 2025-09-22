@@ -5,6 +5,10 @@ processed_assignments.json
 # Local configuration
 config.json
 
+# Google API credentials
+credentials.json
+token.pickle
+
 # Python
 __pycache__/
 *.pyc
